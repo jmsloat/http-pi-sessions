@@ -1,0 +1,6 @@
+/_build/
+/deps/
+/data/
+/priv/static/vendor/
+/erl_crash.dump
+/test-results/
