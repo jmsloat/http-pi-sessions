@@ -84,6 +84,100 @@ defmodule SessionDeskWeb.DeskLiveTest do
     refute render(view) =~ "wrong"
   end
 
+  test "saved and resumed history hides thinking, tool-only and whitespace turns but keeps replies and errors" do
+    hidden = [
+      %{"type" => "thinking", "thinking" => "Internal reasoning"},
+      %{"type" => "toolCall", "id" => "a", "name" => "read"},
+      %{"type" => "toolCall", "id" => "b", "name" => "bash"}
+    ]
+
+    history = [
+      %{"role" => "user", "content" => "Review the project"},
+      %{"role" => "assistant", "content" => hidden},
+      %{
+        "role" => "assistant",
+        "content" => [%{"type" => "text", "text" => " \n\t "}],
+        "errorMessage" => ""
+      },
+      %{
+        "role" => "assistant",
+        "content" => hidden ++ [%{"type" => "text", "text" => "Here is the reply"}]
+      },
+      %{"role" => "assistant", "content" => [], "errorMessage" => "Provider unavailable"}
+    ]
+
+    File.write!(SessionDesk.Catalog.get("demo-main").file, Jason.encode!(history))
+    {:ok, view, _} = live(build_conn(), "/")
+    assert_visible_history(view)
+    view |> element("#resume-session") |> render_click()
+    wait_until(fn -> has_element?(view, ".message.assistant .markdown", "Here is the reply") end)
+    assert_visible_history(view)
+    {:ok, reconnected, _} = live(build_conn(), "/sessions/demo-main")
+    assert_visible_history(reconnected)
+  end
+
+  test "an active empty turn stays hidden until text arrives and its later text is preserved" do
+    alias SessionDesk.{Catalog, Session, State}
+    {:ok, controller} = Catalog.activate("demo-main")
+    wait_until(fn -> Session.snapshot("demo-main").status == :idle end)
+    {:ok, view, _} = live(build_conn(), "/sessions/demo-main")
+
+    state =
+      Session.snapshot("demo-main")
+      |> State.apply(%{"type" => "agent_start"})
+      |> State.apply(%{
+        "type" => "message_start",
+        "message" => %{"role" => "assistant", "content" => []}
+      })
+
+    send(view.pid, {:session, "demo-main", controller, state})
+    refute has_element?(view, ".message.assistant")
+    assert has_element?(view, "#session-status", "Working")
+
+    state =
+      State.apply(state, %{
+        "type" => "message_update",
+        "assistantMessageEvent" => %{"type" => "thinking_delta", "delta" => "Reasoning"}
+      })
+
+    send(view.pid, {:session, "demo-main", controller, state})
+    refute has_element?(view, ".message.assistant")
+
+    state =
+      State.apply(state, %{
+        "type" => "message_update",
+        "assistantMessageEvent" => %{"type" => "text_delta", "delta" => "Visible answer"}
+      })
+
+    send(view.pid, {:session, "demo-main", controller, state})
+    assert has_element?(view, ".message.assistant .markdown", "Visible answer")
+
+    state =
+      State.apply(state, %{
+        "type" => "message_end",
+        "message" => %{
+          "role" => "assistant",
+          "content" => [
+            %{"type" => "thinking", "thinking" => "Reasoning"},
+            %{"type" => "text", "text" => "Visible answer"}
+          ]
+        }
+      })
+
+    send(view.pid, {:session, "demo-main", controller, state})
+    assert has_element?(view, ".message.assistant .markdown", "Visible answer")
+    assert length(Floki.find(Floki.parse_document!(render(view)), ".message.assistant")) == 1
+  end
+
+  defp assert_visible_history(view) do
+    html = render(view)
+    assert length(Floki.find(Floki.parse_document!(html), ".message.assistant")) == 2
+    assert has_element?(view, ".message.assistant .markdown", "Here is the reply")
+    assert has_element?(view, ".message.assistant .error", "Provider unavailable")
+    assert length(Floki.find(Floki.parse_document!(html), ".message.assistant .markdown")) == 1
+    refute html =~ "Internal reasoning"
+  end
+
   defp wait_until(fun, tries \\ 250)
   defp wait_until(_, 0), do: flunk("Timed out")
 

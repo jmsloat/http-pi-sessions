@@ -249,6 +249,12 @@ defmodule SessionDeskWeb.DeskLive do
   defp glyph(_), do: "○"
   defp pretty(term), do: Jason.encode!(term, pretty: true)
 
+  defp present?(text) when is_binary(text), do: String.trim(text) != ""
+  defp present?(_), do: false
+
+  defp visible_message?(message),
+    do: message.role == "user" or present?(message.text) or present?(message.error)
+
   defp stale(view) do
     if is_integer(view.updated_turn) and
          Enum.any?(view.tasks, &(&1["status"] in ["pending", "in_progress"])),
@@ -421,7 +427,7 @@ defmodule SessionDeskWeb.DeskLive do
               class="transcript"
               aria-live="polite"
             >
-              <div :if={@view.messages == []} class="empty-chat">
+              <div :if={not Enum.any?(@view.messages, &visible_message?/1)} class="empty-chat">
                 <div class="empty-symbol">↗</div>
                 <div class="eyebrow">A PLACE TO PICK UP THE THREAD</div>
                 <h2>What are we working on?</h2>
@@ -432,10 +438,7 @@ defmodule SessionDeskWeb.DeskLive do
               </div>
               <article
                 :for={{message, index} <- Enum.with_index(@view.messages)}
-                :if={
-                  message.role == "user" or message.text != "" or message.error != nil or
-                    @view.active_message == index
-                }
+                :if={visible_message?(message)}
                 id={"message-#{index}"}
                 class={"message #{message.role}"}
               >
@@ -448,10 +451,13 @@ defmodule SessionDeskWeb.DeskLive do
                                                                                                    "Agent"}
                 </div>
                 <div :if={message.role == "user"} class="message-text">{message.text}</div>
-                <div :if={message.role == "assistant"} class="message-text markdown">
-                  {SessionDeskWeb.Markdown.render(if message.text == "", do: "…", else: message.text)}
+                <div
+                  :if={message.role == "assistant" and present?(message.text)}
+                  class="message-text markdown"
+                >
+                  {SessionDeskWeb.Markdown.render(message.text)}
                 </div>
-                <div :if={message.error} class="error" role="alert">{message.error}</div>
+                <div :if={present?(message.error)} class="error" role="alert">{message.error}</div>
               </article>
               <section :for={q <- @view.questions} id={"question-#{q["id"]}"} class="question">
                 <div class="eyebrow">YOUR INPUT</div>

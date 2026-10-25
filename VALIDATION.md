@@ -5,11 +5,13 @@
 - Elixir 1.18.4 / Erlang OTP 27.3.4.14 compilation with warnings treated as errors.
 - Production release built and started successfully: HTTP health, saved-session
   page, and SQLite initialization verified with `PHX_SERVER=true`.
-- `PI_TEST_RUNTIME=../runtime-check mix check`: **22 tests, 0 failures**.
+- `PI_TEST_RUNTIME=../runtime-check mix check`: **25 tests, 0 failures**.
   - SQLite metadata persistence, archive/restore, original prototype history import,
     missing directory validation, and symlink workspace deduplication.
   - One agent per workspace, independent session transcripts, simultaneous agents
     in different workspaces, and no automatic replay after application restart.
+  - Empty/thinking/tool-only turns stay hidden in saved, resumed, and streaming
+    views; visible text and provider errors remain visible.
   - Multi-tab LiveView updates, stale event isolation, session creation/renaming,
     model controls, and question validation.
   - Sanitized Markdown/code blocks, active-branch history traversal, malformed

@@ -159,8 +159,14 @@ defmodule SessionDesk.State do
   def notice(s, text), do: %{s | notices: Enum.take([to_string(text) | s.notices], 8)}
   def text(content) when is_binary(content), do: content
 
-  def text(content) when is_list(content),
-    do: Enum.map_join(content, "\n", &if(&1["type"] == "text", do: &1["text"] || "", else: ""))
+  def text(content) when is_list(content) do
+    content
+    |> Enum.flat_map(fn
+      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
+      _ -> []
+    end)
+    |> Enum.join("\n")
+  end
 
   def text(_), do: ""
   defp display(m), do: %{role: m["role"], text: text(m["content"]), error: m["errorMessage"]}
