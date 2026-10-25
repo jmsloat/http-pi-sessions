@@ -7,7 +7,8 @@ workspace/session metadata. Authentication and TLS belong to your reverse proxy.
 The current milestone supports multiple existing-directory workspaces and saved
 sessions, live provider/model and thinking controls, sanitized Markdown with fenced
 code blocks, tool results, Gentle Todo, interactive questions, and reconnect/resume.
-File previews, diffs, worktrees, and deployment configuration are still future work.
+Workspace file previews and staged/unstaged Git diffs are available alongside the chat.
+Worktrees and deployment configuration remain outside this milestone.
 
 ## Run the demo
 
@@ -77,6 +78,36 @@ so configure the paths from your own installation rather than assuming a locatio
 - Drafts are independent per session and kept in browser-tab session storage.
   Workspaces and sessions are available on mobile through the navigation button.
 
+## Files and changes
+
+Open **Files & changes** beside the conversation. On desktop, the inspector expands
+so you can read code and chat side by side; on mobile it appears above the conversation.
+You can browse folders, preview UTF-8 source/text and PNG/JPEG/GIF/WebP images, and
+inspect separate **Staged** (index vs HEAD) and **Unstaged** (files vs index) diffs.
+Untracked files open their current contents. Renames appear as a deletion and an addition.
+Deleted tracked files still have a diff even though their current-file preview is unavailable.
+HTML, SVG, and Markdown are shown as escaped source; workspace content is never run
+as a web page. Unsupported binary files show an explanation.
+
+This is the **current workspace**, shared by all its sessions, not a historical
+snapshot or a list of changes attributed to the selected agent. Files remain available
+when an agent is stopped or a session is archived. The open panel refreshes when the
+selected agent returns to idle; use **Refresh** for terminal edits, another session's
+changes, or intermediate output during a run. Refresh also reloads the selected preview.
+
+Reads run asynchronously. Each directory/change list displays at most 500 entries;
+text previews allow 256 KiB and images 2 MiB. Git commands have a five-second deadline
+and 1 MiB output limit; rendered diffs allow at most 5,000 lines. Larger diffs report that limit rather than displaying an
+incomplete patch. Git must be installed for diffs; non-Git directories still support
+file previews. Submodule contents are excluded from the changes list.
+
+The inspector has no edit, stage, reset, or commit actions. It disables Git's optional
+index refresh, fsmonitor, external diff, and textconv helpers. Paths are restricted to
+the registered workspace; `.git`, symlinks within it, and special files cannot be
+opened. The registered root itself may be a symlink. Workspaces are trusted server
+checkouts used by the coding agent; these checks are not an OS sandbox against a
+process concurrently replacing files or directories.
+
 ## Upgrading from the prototype
 
 Stop the old app cleanly and back up the **entire `DATA_DIR`** before upgrading.
@@ -110,7 +141,7 @@ schema downgrade. The original prototype only understands its original single fi
   uses its native repeated-select protocol. Answers are checked against the pending
   request, so duplicate/stale answers from another tab are rejected.
 - Agent messages render sanitized Markdown, with styled fenced code blocks.
-  File previews are future work. Tool activity is bounded to the last 100 calls;
+  Tool activity is bounded to the last 100 calls;
   long-conversation pagination is not implemented yet.
 - Pi persists history. Pending dialogs are only live process state and do not
   survive an agent/container restart. Resume restores history but never repeats a
@@ -133,7 +164,7 @@ schema downgrade. The original prototype only understands its original single fi
 
 No Dockerfile or Compose file is included. The external deployment should build an
 Elixir release after `mix deps.get`, `mix compile`, and `mix assets.copy`, install
-Pi/Gentle and required development tools, and provide persistent mounts.
+Git, Pi/Gentle and required development tools, and provide persistent mounts.
 SQLite and MDEx use native dependencies; builds download precompiled binaries on
 supported platforms. Source builds need the corresponding C/Rust toolchains.
 Set `PHX_SERVER=true` when starting the release (`bin/session_desk start`).
@@ -201,10 +232,17 @@ its fixture expects an old-format demo history containing a fenced code block, a
 initial workspace named `desk-browser-workspace`, and `TEST_WORKSPACE` pointing to
 another existing directory. Use disposable data/workspace directories for these checks.
 
+`test/support/files_browser_check.mjs` exercises staged/unstaged diffs, source and
+image previews, refresh, workspace isolation, and mobile layout. Run it against a
+**disposable demo server**: it registers temporary workspaces/sessions and removes
+its fixture files afterward. It accepts the same Playwright/base URL variables.
+
 ## Structure
 
 - `lib/session_desk/catalog.ex`: versioned SQLite catalog, process ownership,
   lifecycle, and workspace exclusion.
+- `lib/session_desk/workspace.ex`: bounded file reads and read-only Git inspection.
+- `lib/session_desk_web/file_panel.ex`: asynchronous file browser and preview/diff panel.
 - `lib/session_desk/history.ex`: offline previews from existing Pi/demo transcripts.
 - `lib/session_desk_web/markdown.ex`: Markdown rendering and HTML sanitization.
 - `lib/session_desk/session.ex`: subprocess ownership, RPC commands, pending dialogs,

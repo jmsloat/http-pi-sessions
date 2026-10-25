@@ -1,5 +1,19 @@
 // Browser-only affordances. Application state and rendering live in Elixir.
 const Hooks = {
+  FilePreview: {
+    mounted() { this.selection = this.el.dataset.selection; this.reveal = true; this.showPreview(); },
+    updated() {
+      if (this.selection !== this.el.dataset.selection) { this.selection = this.el.dataset.selection; this.reveal = true; }
+      this.showPreview();
+    },
+    showPreview() {
+      if (this.reveal && this.el.getAttribute('aria-busy') === 'false') {
+        this.reveal = false;
+        this.el.focus({preventScroll: true});
+        this.el.scrollIntoView({block: 'nearest'});
+      }
+    }
+  },
   Details: {
     beforeUpdate() { this.wasOpen = this.el.open; },
     updated() { this.el.open = this.wasOpen; }

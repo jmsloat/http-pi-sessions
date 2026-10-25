@@ -1,4 +1,48 @@
-# Validation — session management milestone (0.2.0)
+# Validation — workspace previews milestone (0.3.0)
+
+## Current milestone
+
+- Elixir 1.18.4 / Erlang OTP 27.3.4.14 compilation with warnings treated as errors.
+- `PI_TEST_RUNTIME=../runtime-check mix check`: **35 tests, 0 failures**, including
+  the existing real Pi 1.4.0 / Gentle 4.3.0 deterministic-provider integration.
+- New backend coverage: text/image/empty/binary/oversized files, directory limits,
+  traversal and symlink rejection, special files, missing paths, staged/unstaged
+  and deleted files, spaces/glob characters/newlines in names, unborn repositories,
+  nested workspace scoping, Git output/line limits, and unchanged Git index contents.
+  External diff, textconv, and fsmonitor helpers are not invoked by the inspector.
+- New LiveView coverage: escaped HTML source, colored diff output, refresh after
+  external edits and file deletion, refresh on agent completion, stopped-agent
+  inspection, and resetting preview/folder state on workspace/session switching.
+- Chromium checks passed at 1440×1000 and 390×844: separate staged/unstaged patches,
+  escaped HTML, image decoding, untracked previews, external edit refresh, workspace
+  isolation, no horizontal page overflow, and no browser JavaScript errors.
+  Desktop/mobile screenshots were visually inspected; selected previews are placed
+  before the lists and brought into view without moving focus on automatic refresh.
+- Production release built and started; the file/diff browser checks also passed
+  against the release using disposable demo data.
+- No database migration, Docker/Compose, or reverse-proxy changes are required.
+  The deployment image needs Git for the changes panel.
+
+## Current limits
+
+- Previews show current workspace content, not historical per-session artifacts.
+  Refresh occurs on the selected agent returning to idle or by clicking Refresh;
+  no filesystem watcher is installed.
+- Text is escaped source (including Markdown/HTML/SVG), not a rendered website.
+  PNG/JPEG/GIF/WebP are supported; other binary formats are not previewed.
+- Lists display at most 500 entries; text/image limits are 256 KiB/2 MiB, and Git
+  commands allow five seconds/1 MiB with at most 5,000 rendered diff lines.
+- Renames appear as deletion/addition; submodule changes are excluded. No editing,
+  staging, resetting, committing, historical diffs, or worktree creation.
+- Workspaces are trusted coding-agent checkouts. Path checks reject traversal,
+  symlinks below the root and special files, but are not an OS isolation boundary
+  against concurrent filesystem replacement. Git can still apply repository clean
+  filters configured by the user; this is not execution isolation for untrusted repos.
+- The hosted provider/full Gentle configuration and external server deployment
+  have not been exercised here. Existing session-history and operational limits below
+  continue to apply.
+
+# Previous milestone — session management (0.2.0)
 
 ## Passed
 
@@ -43,4 +87,4 @@
 - Deployment remains in the separate repository. No Docker or Compose changes.
 - Extended sessions, load, overlapping directory workspaces, detached subprocess
   groups, compaction-summary previews, and unsupported native build targets need
-  further work. Preview/diff panels and worktrees are not part of this milestone.
+  further work. Worktrees were not part of that milestone; preview/diff coverage is recorded above.
