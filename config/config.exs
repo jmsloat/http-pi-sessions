@@ -9,5 +9,5 @@ config :session_desk, SessionDeskWeb.Endpoint,
   secret_key_base: String.duplicate("local-prototype-only-", 4)
 
 config :phoenix, :json_library, Jason
-config :session_desk, start_session: config_env() != :test
+config :session_desk, start_catalog: config_env() != :test
 config :logger, :console, format: "$time $level $message\n"

@@ -16,6 +16,7 @@ defmodule SessionDeskWeb.Router do
   scope "/" do
     pipe_through :browser
     live "/", SessionDeskWeb.DeskLive, :index
+    live "/sessions/:id", SessionDeskWeb.DeskLive, :show
   end
 end
 

@@ -10,6 +10,25 @@ defmodule SessionDesk.StateTest do
       }
     }
 
+  test "non-text blocks do not create separator-only text or pad mixed content" do
+    hidden = [
+      %{"type" => "thinking", "thinking" => "Internal reasoning"},
+      %{"type" => "toolCall", "id" => "a", "name" => "read"},
+      %{"type" => "toolCall", "id" => "b", "name" => "bash"}
+    ]
+
+    assert State.text(hidden) == ""
+
+    assert State.text(hidden ++ [%{"type" => "text", "text" => "Visible reply"}] ++ hidden) ==
+             "Visible reply"
+
+    assert State.text([
+             %{"type" => "text", "text" => "First"},
+             hd(hidden),
+             %{"type" => "text", "text" => "Second"}
+           ]) == "First\nSecond"
+  end
+
   test "projects Gentle snapshots, including failed mutations that return unchanged state" do
     s =
       State.apply(%State{}, %{

@@ -5,7 +5,7 @@ export default function(pi: any) {
   let step = 0;
   pi.registerProvider('desk-test', {
     baseUrl: 'http://unused.invalid', apiKey: 'test-only', api: 'desk-test-api',
-    models: [{id:'deterministic',name:'Deterministic integration test',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:32000,maxTokens:2048}],
+    models: ['deterministic','deterministic-reasoning'].map(id=>({id,name:id,reasoning:id.endsWith('reasoning'),input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:32000,maxTokens:2048})),
     streamSimple(model: any, _context: any, options: any) {
       const stream = createAssistantMessageEventStream();
       const thisStep = step++ % 4;

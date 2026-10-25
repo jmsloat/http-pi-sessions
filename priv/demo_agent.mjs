@@ -5,6 +5,8 @@ const file = process.argv[2];
 let messages = [];
 try { messages = JSON.parse(readFileSync(file, 'utf8')); } catch {}
 let generation = 0, waiting = false, active = false;
+const models = [{provider:'demo',id:'scripted-demo',name:'Scripted demo',reasoning:true},{provider:'demo',id:'scripted-fast',name:'Scripted fast',reasoning:false}];
+let model = models.find(m=>m.id===process.argv[3]) || models[0], thinkingLevel=process.argv[4] || 'off';
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
 const save = () => { if(file) writeFileSync(file, JSON.stringify(messages)); };
 const response = (cmd, data = {}) => emit({type:'response', id:cmd.id, command:cmd.type, success:true, data});
@@ -30,7 +32,10 @@ function todo(tasks) {
   messages.push(message); save(); emit({type:'message_end',message});
 }
 async function handle(cmd) {
-  if(cmd.type==='get_state') return response(cmd,{isStreaming:active,sessionFile:file,model:{id:'scripted-demo'}});
+  if(cmd.type==='get_state') return response(cmd,{isStreaming:active,sessionFile:file,model,thinkingLevel});
+  if(cmd.type==='get_available_models') return response(cmd,{models});
+  if(cmd.type==='set_model') { model=models.find(m=>m.provider===cmd.provider&&m.id===cmd.modelId)||model; if(!model.reasoning)thinkingLevel='off'; return response(cmd,model); }
+  if(cmd.type==='set_thinking_level') { thinkingLevel=model.reasoning?cmd.level:'off'; return response(cmd); }
   if(cmd.type==='get_messages') return response(cmd,{messages});
   if(cmd.type==='abort') { generation++; active=false; waiting=false; emit({type:'agent_end'}); emit({type:'agent_settled'}); return response(cmd); }
   if(cmd.type==='prompt') {
