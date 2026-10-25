@@ -18,7 +18,8 @@ defmodule SessionDeskWeb.DeskLive do
        workspace_id: nil,
        catalog: Catalog.list(),
        show_archived: false,
-       navigation_open: false
+       navigation_open: false,
+       inspector_tab: "activity"
      )}
   end
 
@@ -98,6 +99,9 @@ defmodule SessionDeskWeb.DeskLive do
       do: {:noreply, assign(socket, :draft, text)},
       else: {:noreply, socket}
   end
+
+  def handle_event("inspector", %{"tab" => tab}, socket) when tab in ["activity", "files"],
+    do: {:noreply, assign(socket, :inspector_tab, tab)}
 
   def handle_event("navigation", _, socket),
     do: {:noreply, assign(socket, :navigation_open, not socket.assigns.navigation_open)}
@@ -419,7 +423,7 @@ defmodule SessionDeskWeb.DeskLive do
             </select>
           </form>
         </div>
-        <div class="work-area">
+        <div class={["work-area", @inspector_tab == "files" && "reviewing"]}>
           <section class="conversation" aria-label="Conversation">
             <div
               id={"transcript-#{@session_id}"}
@@ -543,64 +547,95 @@ defmodule SessionDeskWeb.DeskLive do
             </div>
           </section>
           <aside class="inspector" aria-label="Session details">
-            <section class="task-panel">
-              <div class="panel-heading">
-                <h2>Gentle Todo</h2>
-                <span>
-                  {Enum.count(@view.tasks, &(&1["status"] == "done"))}/{Enum.count(
-                    @view.tasks,
-                    &(&1["status"] != "dropped")
-                  )}
-                </span>
-              </div>
-              <div :if={@view.tasks == []} class="empty-tasks">
-                <span>☷</span>
-                <p>No active plan yet</p>
-                <small>The agent’s Gentle Todo list will appear here when it creates one.</small>
-              </div>
-              <div :for={task <- @view.tasks} class={"task #{task["status"]}"}>
-                <span class="task-glyph">{glyph(task["status"])}</span>
-                <div>
-                  <strong>{task["title"]}</strong><small :if={task["note"]}>{task["note"]}</small><small class="task-status">{String.replace(task["status"], "_", " ")}</small>
-                </div>
-              </div>
-              <div :if={stale(@view) >= 2} class="stale">Plan unchanged for {stale(@view)} turns</div>
-              <div class="panel-footnote">Read-only · managed by Gentle</div>
-            </section>
-            <section class="activity-panel">
-              <div class="panel-heading">
-                <h2>Tool activity</h2>
-                <span>{length(@view.tools)}</span>
-              </div>
-              <p :if={@view.tools == []} class="muted">Tool calls will appear as the agent works.</p>
-              <details
-                :for={tool <- @view.tools}
-                id={"tool-#{tool.id}"}
-                phx-hook="Details"
-                class="tool"
+            <div class="inspector-tabs" aria-label="Inspector views">
+              <button
+                id="activity-tab"
+                phx-click="inspector"
+                phx-value-tab="activity"
+                aria-pressed={to_string(@inspector_tab == "activity")}
               >
-                <summary>
+                Plan &amp; tools
+              </button>
+              <button
+                id="files-tab"
+                phx-click="inspector"
+                phx-value-tab="files"
+                aria-pressed={to_string(@inspector_tab == "files")}
+              >
+                Files &amp; changes
+              </button>
+            </div>
+            <.live_component
+              :if={@inspector_tab == "files"}
+              module={SessionDeskWeb.FilePanel}
+              id={"workspace-files-#{@session_id}"}
+              workspace={@workspace}
+              agent_status={@view.status}
+            />
+            <div :if={@inspector_tab == "activity"}>
+              <section class="task-panel">
+                <div class="panel-heading">
+                  <h2>Gentle Todo</h2>
                   <span>
-                    {case tool.status do
-                      :working -> "◐"
-                      :error -> "!"
-                      _ -> "✓"
-                    end}
+                    {Enum.count(@view.tasks, &(&1["status"] == "done"))}/{Enum.count(
+                      @view.tasks,
+                      &(&1["status"] != "dropped")
+                    )}
                   </span>
-                  {tool.name}<small>{tool.status}</small>
-                </summary>
-                <pre :if={tool.args}>{pretty(tool.args)}</pre>
-                <pre :if={tool.output}>{State.text(tool.output["content"])}</pre>
-                <details :if={tool.output && tool.output["details"]}>
-                  <summary>Structured result</summary>
-                  <pre>{pretty(tool.output["details"])}</pre>
+                </div>
+                <div :if={@view.tasks == []} class="empty-tasks">
+                  <span>☷</span>
+                  <p>No active plan yet</p>
+                  <small>The agent’s Gentle Todo list will appear here when it creates one.</small>
+                </div>
+                <div :for={task <- @view.tasks} class={"task #{task["status"]}"}>
+                  <span class="task-glyph">{glyph(task["status"])}</span>
+                  <div>
+                    <strong>{task["title"]}</strong><small :if={task["note"]}>{task["note"]}</small><small class="task-status">{String.replace(task["status"], "_", " ")}</small>
+                  </div>
+                </div>
+                <div :if={stale(@view) >= 2} class="stale">
+                  Plan unchanged for {stale(@view)} turns
+                </div>
+                <div class="panel-footnote">Read-only · managed by Gentle</div>
+              </section>
+              <section class="activity-panel">
+                <div class="panel-heading">
+                  <h2>Tool activity</h2>
+                  <span>{length(@view.tools)}</span>
+                </div>
+                <p :if={@view.tools == []} class="muted">
+                  Tool calls will appear as the agent works.
+                </p>
+                <details
+                  :for={tool <- @view.tools}
+                  id={"tool-#{tool.id}"}
+                  phx-hook="Details"
+                  class="tool"
+                >
+                  <summary>
+                    <span>
+                      {case tool.status do
+                        :working -> "◐"
+                        :error -> "!"
+                        _ -> "✓"
+                      end}
+                    </span>
+                    {tool.name}<small>{tool.status}</small>
+                  </summary>
+                  <pre :if={tool.args}>{pretty(tool.args)}</pre>
+                  <pre :if={tool.output}>{State.text(tool.output["content"])}</pre>
+                  <details :if={tool.output && tool.output["details"]}>
+                    <summary>Structured result</summary>
+                    <pre>{pretty(tool.output["details"])}</pre>
+                  </details>
                 </details>
+              </section>
+              <details :if={@view.notices != []} class="diagnostics">
+                <summary>Diagnostics · {length(@view.notices)}</summary>
+                <pre :for={notice <- @view.notices}>{notice}</pre>
               </details>
-            </section>
-            <details :if={@view.notices != []} class="diagnostics">
-              <summary>Diagnostics · {length(@view.notices)}</summary>
-              <pre :for={notice <- @view.notices}>{notice}</pre>
-            </details>
+            </div>
             <div class="workspace-info">
               <span class="rail-label">WORKING DIRECTORY</span><code>{@workspace}</code>
             </div>
