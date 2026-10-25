@@ -5,15 +5,18 @@ defmodule SessionDesk.Application do
     children = [
       {Phoenix.PubSub, name: SessionDesk.PubSub},
       {Registry, keys: :unique, name: SessionDesk.Registry},
+      SessionDesk.Catalog,
       {DynamicSupervisor, name: SessionDesk.SessionSupervisor, strategy: :one_for_one},
       SessionDeskWeb.Endpoint
     ]
 
-    with {:ok, pid} <-
-           Supervisor.start_link(children, strategy: :one_for_one, name: SessionDesk.Supervisor) do
-      if Application.get_env(:session_desk, :start_session),
-        do: SessionDesk.Session.start_default()
+    children =
+      if Application.get_env(:session_desk, :start_catalog, true),
+        do: children,
+        else: List.delete(children, SessionDesk.Catalog)
 
+    with {:ok, pid} <-
+           Supervisor.start_link(children, strategy: :rest_for_one, name: SessionDesk.Supervisor) do
       {:ok, pid}
     end
   end

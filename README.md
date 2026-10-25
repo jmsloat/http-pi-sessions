@@ -1,15 +1,13 @@
-# Session Desk — integration prototype
+# Session Desk
 
 A single-user, self-hosted coding-agent workspace in **Elixir + Phoenix LiveView**.
-The host owns a Pi session; browser pages subscribe to it. Gentle Shell owns the
-to-do list and questions. Authentication and TLS belong to your reverse proxy.
+Pi owns conversation history; Gentle Shell owns todos and questions; SQLite stores
+workspace/session metadata. Authentication and TLS belong to your reverse proxy.
 
-This is an integration prototype, not the full application. It has one configured
-workspace and one session: streaming text, Gentle Todo, expandable tool results,
-RPC questions, stop, browser reconnect, and reopening saved Pi history. There is
-no project manager, file/diff panel, worktree creation, or deployment configuration
-yet. No database is needed for this single-session slice; the eventual app metadata
-store is planned to use SQLite.
+The current milestone supports multiple existing-directory workspaces and saved
+sessions, live provider/model and thinking controls, sanitized Markdown with fenced
+code blocks, tool results, Gentle Todo, interactive questions, and reconnect/resume.
+File previews, diffs, worktrees, and deployment configuration are still future work.
 
 ## Run the demo
 
@@ -23,10 +21,11 @@ mix setup
 mix phx.server
 ```
 
-Open http://localhost:4000. Send a message, watch the plan appear, refresh while
-the agent is working, and answer its question. **Demo mode is a scripted RPC
+Open http://localhost:4000. Click **Resume session**, send a message, watch the plan
+appear, refresh while the agent is working, and answer its question. **Demo mode is a scripted RPC
 fixture, not a language model.** It performs no workspace operations. Its history
-is stored in `data/demo.json`.
+for the first session is stored in `data/demo.json`; subsequent sessions use
+`DATA_DIR/sessions/demo/`.
 
 ## Use your Pi + Gentle installation
 
@@ -43,7 +42,9 @@ DATA_DIR=/absolute/path/to/session-desk-data \
 mix phx.server
 ```
 
-The app starts Pi directly with `--mode rpc --session DATA_DIR/pi-session.jsonl`.
+The app starts Pi directly with `--mode rpc --session <app-owned-session-file>`.
+The imported first live session keeps `DATA_DIR/pi-session.jsonl`; new ones use
+`DATA_DIR/sessions/live/<id>.jsonl`.
 It sets `GENTLE_SHELL_INTERACTIVE_HOST=1`, which enables Gentle's native RPC question
 fallbacks. Optional `PI_ARGS_JSON` is a JSON array, for example
 `["--provider","anthropic","--model","your-model-id"]`. Arguments are passed
@@ -52,6 +53,48 @@ directly to the process, not interpolated into a shell command.
 Gentle must actually be loaded in that Pi home; selecting live mode alone does not
 install it. Gentle's launcher may use a separate home or a bundled Pi executable,
 so configure the paths from your own installation rather than assuming a location.
+
+## Workspaces, sessions, and model controls
+
+- **Add workspace** registers an existing directory visible inside the server or
+  container. This does not clone a repository or create a worktree. Symlink aliases
+  to an already registered directory are rejected.
+- **New session** creates metadata only. Opening any saved session reads its history
+  without launching Pi. Each session has a bookmarkable `/sessions/<id>` URL.
+- **Resume session** explicitly starts its agent. Only one agent process can own a
+  workspace at a time: resuming another session suspends an idle one, and rejects
+  the action if that session is busy. Different workspaces can run concurrently.
+- **Model** groups Pi's available models by provider. Choose one and click **Apply
+  model** while idle. No environment edit or container restart is needed. Models
+  and credentials come from the configured Pi agent home, not a hardcoded list.
+- **Thinking** appears for reasoning models. Pi clamps unsupported levels to a
+  supported value; the selector then displays the effective level reported by Pi.
+- **Session settings** lets you rename, suspend, archive, or restore a session.
+  Archive preserves its transcript and requires it to be idle/stopped.
+- Model and thinking choices are remembered per session, including after restart.
+  `PI_ARGS_JSON` model arguments are defaults for sessions without a recorded choice.
+  The tested Pi RPC setters do not change your terminal's global model defaults.
+- Drafts are independent per session and kept in browser-tab session storage.
+  Workspaces and sessions are available on mobile through the navigation button.
+
+## Upgrading from the prototype
+
+Stop the old app cleanly and back up the **entire `DATA_DIR`** before upgrading.
+Keep its existing data and agent-home mounts. The first launch creates
+`catalog.sqlite3` (schema version 1) and registers your configured `WORKSPACE`.
+The first session points at the existing `pi-session.jsonl` or `demo.json`; it is
+not moved, rewritten, or replayed. Click **Resume session** to start its agent.
+
+`WORKSPACE` now seeds the first workspace; changing the environment later does not
+move existing sessions to a new directory. Register additional directories in the UI.
+Paths must remain valid inside the container after an upgrade. Demo/live metadata
+and transcript files are separate; switching modes requires restarting the app.
+
+Back up the whole data directory while the app is stopped (or use a consistent
+SQLite backup plus transcript backups). SQLite WAL/SHM files may exist while running;
+do not copy just `catalog.sqlite3` from a running app. Metadata migrations run at
+startup, and newer unknown schema versions are rejected. There is no automatic
+schema downgrade. The original prototype only understands its original single file.
 
 ## Behavior and limits
 
@@ -66,23 +109,33 @@ so configure the paths from your own installation rather than assuming a locatio
 - Select, confirm, input, and editor RPC dialogs are supported. Gentle multi-select
   uses its native repeated-select protocol. Answers are checked against the pending
   request, so duplicate/stale answers from another tab are rejected.
-- The transcript currently renders escaped plain text, including code fences.
-  Rich Markdown and file previews are future work. Tool activity is bounded to the
-  last 100 calls; long-conversation pagination is not implemented yet.
+- Agent messages render sanitized Markdown, with styled fenced code blocks.
+  File previews are future work. Tool activity is bounded to the last 100 calls;
+  long-conversation pagination is not implemented yet.
 - Pi persists history. Pending dialogs are only live process state and do not
   survive an agent/container restart. Resume restores history but never repeats a
-  prompt automatically. Reconstructed tool history is available to Pi; the current
-  prototype's activity panel only shows calls observed during this server run.
+  prompt automatically. Saved tool results reappear in the activity panel; their
+  original call arguments are currently shown only for calls observed live.
 - erlexec owns a separate process group for Pi and cleans up that group on exit.
   Detached descendants that create their own groups are outside that guarantee;
   the deployment must handle whole-container shutdown.
-- Demo and live histories are separate. Switching modes requires restarting the app.
+- Server restarts leave sessions stopped. Previously running work is marked
+  interrupted. Pending questions do not survive agent restarts. Missing workspace
+  mounts produce an actionable error instead of launching in a different directory.
+- Offline previews show up to 500 saved messages and read files up to 32 MB. They
+  follow the selected Pi JSONL branch; compaction summaries and custom entry types
+  are not expanded in offline previews. Resume hydrates Pi's own current context.
+  RPC records still have an 8 MB limit. Very large active sessions need further work.
+- Separate registered directories should be independent checkouts. Overlapping
+  directories inside one repository are not detected as a shared editing workspace.
 
 ## Runtime contract for the deployment repository
 
 No Dockerfile or Compose file is included. The external deployment should build an
 Elixir release after `mix deps.get`, `mix compile`, and `mix assets.copy`, install
 Pi/Gentle and required development tools, and provide persistent mounts.
+SQLite and MDEx use native dependencies; builds download precompiled binaries on
+supported platforms. Source builds need the corresponding C/Rust toolchains.
 Set `PHX_SERVER=true` when starting the release (`bin/session_desk start`).
 
 ```sh
@@ -95,8 +148,8 @@ MIX_ENV=prod mix release
 | Variable | Default | Purpose |
 |---|---|---|
 | `SESSION_DESK_MODE` | `demo` | `demo` or `live` |
-| `WORKSPACE` | Current directory | Agent working directory, as seen inside the container |
-| `DATA_DIR` | `./data` | Persistent app-owned session files |
+| `WORKSPACE` | Current directory | Initial workspace directory on first startup |
+| `DATA_DIR` | `./data` | Persistent SQLite catalog and app-owned session files |
 | `PI_EXECUTABLE` | `pi` | Executable path or command on PATH |
 | `PI_CODING_AGENT_DIR` | Inherited Pi default | Configured agent home |
 | `PI_ARGS_JSON` | `[]` | Additional CLI arguments as a JSON string array |
@@ -118,11 +171,12 @@ the application port around the authenticating proxy.
 mix check
 ```
 
-The ExUnit suite covers LF-only framing, real Gentle-shaped snapshots, streaming
-projections, subscriber disconnect/reconnect, question validation, and abort.
+The ExUnit suite covers framing, Gentle state, streaming, model controls, sanitized
+Markdown, SQLite persistence, legacy history, workspace exclusion, archive/restore,
+independent sessions, multi-tab reconnect, question validation, and abort.
 When `PI_TEST_RUNTIME` points at the installed test dependencies below, it also
 tests the Elixir controller against real Pi/Gentle, including process interruption
-and saved-history recovery: `PI_TEST_RUNTIME=../runtime-check mix check`.
+model/thinking changes and saved-history recovery: `PI_TEST_RUNTIME=../runtime-check mix check`.
 
 To verify **real Pi + real Gentle tools** without credentials, install test runtimes
 outside this project and run the deterministic provider integration:
@@ -142,9 +196,17 @@ stream final text. It is never enabled in normal live mode.
 Set `PLAYWRIGHT_MODULE` to an installed Playwright module, `TEST_BASE_URL` if needed,
 and `TEST_LIVE_PI=1` when the server uses the deterministic provider above. It checks
 desktop and mobile flows, including closing the browser while a question is pending.
+`session_browser_check.mjs` also exercises workspace/session UI and draft isolation;
+its fixture expects an old-format demo history containing a fenced code block, an
+initial workspace named `desk-browser-workspace`, and `TEST_WORKSPACE` pointing to
+another existing directory. Use disposable data/workspace directories for these checks.
 
 ## Structure
 
+- `lib/session_desk/catalog.ex`: versioned SQLite catalog, process ownership,
+  lifecycle, and workspace exclusion.
+- `lib/session_desk/history.ex`: offline previews from existing Pi/demo transcripts.
+- `lib/session_desk_web/markdown.ex`: Markdown rendering and HTML sanitization.
 - `lib/session_desk/session.ex`: subprocess ownership, RPC commands, pending dialogs,
   startup history hydration, and throttled broadcasts.
 - `lib/session_desk/state.ex`: browser-facing projection of Pi/Gentle events.

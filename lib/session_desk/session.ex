@@ -1,5 +1,5 @@
 defmodule SessionDesk.Session do
-  use GenServer, restart: :temporary
+  use GenServer, restart: :temporary, shutdown: 10_000
   alias SessionDesk.{Protocol, State}
 
   @moduledoc "Owns the RPC subprocess independently of LiveView connections. No automatic prompt replay."
@@ -7,12 +7,8 @@ defmodule SessionDesk.Session do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: via(opts[:id] || "main"))
   def via(id), do: {:via, Registry, {SessionDesk.Registry, id}}
   def snapshot(id \\ "main"), do: GenServer.call(via(id), :snapshot)
-  def command(action, id \\ "main"), do: GenServer.call(via(id), {:command, action})
+  def command(action, id \\ "main"), do: GenServer.call(via(id), {:command, action}, 15_000)
   def subscribe(id \\ "main"), do: Phoenix.PubSub.subscribe(SessionDesk.PubSub, "session:" <> id)
-
-  def start_default do
-    DynamicSupervisor.start_child(SessionDesk.SessionSupervisor, {__MODULE__, id: "main"})
-  end
 
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -26,6 +22,8 @@ defmodule SessionDesk.Session do
       pending: %{},
       seq: 0,
       flush: nil,
+      hydrated: false,
+      persisted: nil,
       opts: opts
     }
 
@@ -66,6 +64,43 @@ defmodule SessionDesk.Session do
     end
   end
 
+  def handle_call({:command, :suspend}, _, s) do
+    if s.view.status in [:idle, :interrupted, :error] do
+      {:stop, :normal, {:ok, s.view}, s}
+    else
+      {:reply, {:error, "Wait for this session to finish or stop its current run."}, s}
+    end
+  end
+
+  def handle_call({:command, {:set_model, provider, model}}, _, s) do
+    if s.view.status == :idle and
+         Enum.any?(s.view.models, &(&1["provider"] == provider and &1["id"] == model)) do
+      s =
+        request(%{s | view: %{s.view | status: :configuring}}, "set_model", %{
+          "provider" => provider,
+          "modelId" => model
+        })
+
+      {:reply, :ok, publish(s)}
+    else
+      {:reply, {:error, "Choose an available model while the session is idle."}, s}
+    end
+  end
+
+  def handle_call({:command, {:set_thinking, level}}, _, s) do
+    if s.view.status == :idle and s.view.reasoning and
+         level in ["off", "minimal", "low", "medium", "high", "xhigh"] do
+      s =
+        request(%{s | view: %{s.view | status: :configuring}}, "set_thinking_level", %{
+          "level" => level
+        })
+
+      {:reply, :ok, publish(s)}
+    else
+      {:reply, {:error, "Thinking controls require an idle session and a reasoning model."}, s}
+    end
+  end
+
   def handle_call({:command, :abort}, _, s) do
     if s.os_pid do
       # No steering/follow-up queue is exposed in this prototype.
@@ -100,8 +135,25 @@ defmodule SessionDesk.Session do
 
   def handle_call({:command, :restart}, _, %{os_pid: nil} = s),
     do:
-      {:reply, :ok, %{s | view: %State{revision: s.view.revision}, buffer: "", pending: %{}},
+      {:reply, :ok,
+       %{s | view: %State{revision: s.view.revision}, buffer: "", pending: %{}, hydrated: false},
        {:continue, :launch}}
+
+  def handle_call({:command, :restart}, _, %{view: %{status: status}} = s)
+      when status in [:error, :interrupted] do
+    stop_child(s)
+
+    {:reply, :ok,
+     %{
+       s
+       | child: nil,
+         os_pid: nil,
+         view: %State{revision: s.view.revision},
+         buffer: "",
+         pending: %{},
+         hydrated: false
+     }, {:continue, :launch}}
+  end
 
   def handle_call({:command, _}, _, s), do: {:reply, {:error, "Action unavailable."}, s}
 
@@ -149,30 +201,87 @@ defmodule SessionDesk.Session do
     {:noreply, publish(%{s | view: %{s.view | questions: questions, status: status}})}
   end
 
+  def handle_info({:request_timeout, id}, s) do
+    case Map.pop(s.pending, id) do
+      {nil, _} ->
+        {:noreply, s}
+
+      {request, pending} ->
+        if s.child, do: :exec.stop(s.child)
+
+        view =
+          State.notice(
+            %{s.view | status: :error},
+            "Pi did not answer #{request.type}. Resume when ready; no prompt will be replayed."
+          )
+
+        {:noreply, publish(%{s | pending: pending, view: view})}
+    end
+  end
+
   def handle_info(:flush, s), do: {:noreply, publish(%{s | flush: nil})}
   def handle_info(_, s), do: {:noreply, s}
-  def terminate(_, s), do: if(s.child, do: :exec.stop(s.child))
+
+  def terminate(_, s), do: stop_child(s)
+
+  defp stop_child(s) do
+    if s.child && Process.alive?(s.child) do
+      ref = Process.monitor(s.child)
+      :exec.stop(s.child)
+
+      receive do
+        {:DOWN, ^ref, :process, _, _} -> :ok
+      after
+        5_000 ->
+          :exec.kill(s.os_pid, 9)
+
+          receive do
+            {:DOWN, ^ref, :process, _, _} -> :ok
+          after
+            2_000 -> :ok
+          end
+      end
+    end
+  end
 
   defp consume(s, %{"type" => "response", "id" => id} = event) do
-    {kind, pending} = Map.pop(s.pending, id)
+    {request, pending} = Map.pop(s.pending, id)
+    kind = if request, do: request.type
+    if request, do: Process.cancel_timer(request.timer)
     s = %{s | pending: pending, view: State.apply(s.view, event)}
 
     case {kind, event["success"], event["data"]} do
       {"get_state", true, data} ->
-        request(
-          %{
-            s
-            | view: %{
-                s.view
-                | model: get_in(data, ["model", "id"]),
-                  session_file: data["sessionFile"]
-              }
-          },
-          "get_messages"
-        )
+        view = %{
+          s.view
+          | model: get_in(data, ["model", "id"]),
+            provider: get_in(data, ["model", "provider"]),
+            reasoning: get_in(data, ["model", "reasoning"]) == true,
+            thinking: data["thinkingLevel"],
+            session_file: data["sessionFile"]
+        }
+
+        if s.hydrated do
+          %{s | view: %{view | status: :idle}}
+        else
+          request(%{s | view: view}, "get_messages")
+        end
 
       {"get_messages", true, %{"messages" => messages}} ->
-        %{s | view: %{State.restore(s.view, messages) | status: :idle}}
+        request(
+          %{s | hydrated: true, view: State.restore(s.view, messages)},
+          "get_available_models"
+        )
+
+      {"get_available_models", true, %{"models" => models}} ->
+        models = Enum.map(models, &Map.take(&1, ["id", "provider", "name", "reasoning"]))
+        %{s | view: %{s.view | models: models, status: :idle}}
+
+      {kind, true, _} when kind in ["set_model", "set_thinking_level"] ->
+        request(s, "get_state")
+
+      {kind, false, _} when kind in ["set_model", "set_thinking_level", "get_available_models"] ->
+        %{s | view: %{s.view | status: :idle}}
 
       {"prompt", false, _} ->
         %{s | view: %{s.view | status: :idle}}
@@ -196,11 +305,16 @@ defmodule SessionDesk.Session do
   end
 
   defp request(s, type, attrs \\ %{}) do
+    s = %{s | view: %{s.view | command_error: nil}}
     id = "request-#{s.seq + 1}"
 
     case send_record(s, Map.merge(attrs, %{"id" => id, "type" => type})) do
-      :ok -> %{s | seq: s.seq + 1, pending: Map.put(s.pending, id, type)}
-      error -> %{s | view: State.notice(%{s.view | status: :error}, inspect(error))}
+      :ok ->
+        timer = Process.send_after(self(), {:request_timeout, id}, 30_000)
+        %{s | seq: s.seq + 1, pending: Map.put(s.pending, id, %{type: type, timer: timer})}
+
+      error ->
+        %{s | view: State.notice(%{s.view | status: :error}, inspect(error))}
     end
   end
 
@@ -219,14 +333,50 @@ defmodule SessionDesk.Session do
 
   defp publish(s) do
     s = %{s | view: %{s.view | revision: s.view.revision + 1}}
-    Phoenix.PubSub.broadcast(SessionDesk.PubSub, "session:" <> s.id, {:session, s.view})
-    s
+
+    Phoenix.PubSub.broadcast(
+      SessionDesk.PubSub,
+      "session:" <> s.id,
+      {:session, s.id, self(), s.view}
+    )
+
+    fingerprint = {s.view.status, s.view.provider, s.view.model, s.view.thinking}
+
+    if s.opts[:catalog] && fingerprint != s.persisted do
+      SessionDesk.Catalog.changed(s.opts[:catalog], s.id, self(), s.view)
+    end
+
+    preferences =
+      Map.merge(
+        s.opts[:preferences] || %{},
+        Enum.reject(
+          %{provider: s.view.provider, model: s.view.model, thinking: s.view.thinking},
+          fn {_, value} -> is_nil(value) end
+        )
+        |> Map.new()
+      )
+
+    %{s | persisted: fingerprint, opts: Keyword.put(s.opts, :preferences, preferences)}
   end
 
   defp launch(opts) do
     root = Application.fetch_env!(:session_desk, :data_dir)
     File.mkdir_p!(root)
-    mode = Application.fetch_env!(:session_desk, :mode)
+    mode = opts[:mode] || Application.fetch_env!(:session_desk, :mode)
+
+    file =
+      opts[:session_file] ||
+        Path.join(root, if(mode == "demo", do: "demo.json", else: "pi-session.jsonl"))
+
+    File.mkdir_p!(Path.dirname(file))
+    preferences = opts[:preferences] || %{}
+
+    model_args =
+      if preferences[:provider] && preferences[:model],
+        do: ["--provider", preferences.provider, "--model", preferences.model],
+        else: []
+
+    thinking_args = if preferences[:thinking], do: ["--thinking", preferences.thinking], else: []
 
     {executable, args} =
       if opts[:command] do
@@ -237,13 +387,15 @@ defmodule SessionDesk.Session do
             {System.find_executable("node"),
              [
                Path.join(:code.priv_dir(:session_desk), "demo_agent.mjs"),
-               Path.join(root, "demo.json")
+               file,
+               preferences[:model] || "scripted-demo",
+               preferences[:thinking] || "off"
              ]}
 
           "live" ->
             {System.find_executable(Application.fetch_env!(:session_desk, :pi_executable)),
-             ["--mode", "rpc", "--session", Path.join(root, "pi-session.jsonl")] ++
-               Application.fetch_env!(:session_desk, :pi_args)}
+             ["--mode", "rpc", "--session", file] ++
+               Application.fetch_env!(:session_desk, :pi_args) ++ model_args ++ thinking_args}
         end
       end
 

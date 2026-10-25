@@ -5,7 +5,7 @@ defmodule SessionDesk.MixProject do
   def project do
     [
       app: :session_desk,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -24,6 +24,9 @@ defmodule SessionDesk.MixProject do
       {:bandit, "~> 1.6"},
       {:jason, "~> 1.4"},
       {:erlexec, "~> 2.5.0"},
+      {:exqlite, "~> 0.43.0"},
+      {:mdex, "~> 0.14.3"},
+      {:html_sanitize_ex, "~> 1.5"},
       {:floki, "~> 0.36.0", only: :test}
     ]
   end

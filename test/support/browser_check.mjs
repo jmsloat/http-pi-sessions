@@ -12,6 +12,14 @@ try {
   let context=await browser.newContext({viewport:{width:1440,height:1000}});
   let page=await context.newPage();page.on('pageerror',e=>errors.push(String(e)));
   await page.goto(base);await page.waitForSelector('.phx-connected');
+  await page.waitForURL('**/sessions/**');
+  await page.locator('#resume-session').click();
+  await page.waitForFunction(()=>document.querySelector('#session-status').textContent.includes('Ready'));
+  await page.locator('#model-select').selectOption(JSON.stringify(live?['desk-test','deterministic-reasoning']:['demo','scripted-demo']));
+  await page.getByRole('button',{name:'Apply model',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('#session-status').textContent.includes('Ready'));
+  await page.locator('#thinking-select').selectOption('high');
+  await page.waitForFunction(()=>document.querySelector('#session-status').textContent.includes('Ready') && document.querySelector('#thinking-select').value==='high');
   await page.screenshot({path:out+'/desktop-empty.png',fullPage:true});
   await page.getByLabel('Message your agent').fill('Make a three-step plan and ask me a question.');
   await page.getByRole('button',{name:'Send',exact:false}).click();
@@ -20,10 +28,11 @@ try {
   await page.getByText(live?'Prototype: Can you see the real Gentle Todo list?':'Which behavior should we verify next?',{exact:true}).waitFor({timeout:20000});
   assert.equal(await page.locator('.task').count(),3);
   await page.screenshot({path:out+'/desktop-question.png',fullPage:true});
+  const sessionUrl=page.url();
   await context.close();
   context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
   page=await context.newPage();page.on('pageerror',e=>errors.push(String(e)));
-  await page.goto(base);await page.waitForSelector('.phx-connected');
+  await page.goto(sessionUrl);await page.waitForSelector('.phx-connected');
   assert.equal(await page.locator('.question').count(),1);
   await page.screenshot({path:out+'/mobile-question.png',fullPage:true});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'Mobile horizontal overflow');
@@ -33,5 +42,5 @@ try {
   assert.equal(await page.locator('.message.user').count(),1);
   assert.equal(await page.locator('.question').count(),0);
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({passed:true,mode:live?'real-pi-deterministic-provider':'demo',checks:['desktop','streaming','reload','close and reopen browser context','question answer','task updates','mobile overflow','no duplicate prompt','no browser errors'],screenshots:out}));
+  console.log(JSON.stringify({passed:true,mode:live?'real-pi-deterministic-provider':'demo',checks:['live model selection','thinking level','desktop','streaming','reload','close and reopen browser context','question answer','task updates','mobile overflow','no duplicate prompt','no browser errors'],screenshots:out}));
 } finally {await browser.close();}

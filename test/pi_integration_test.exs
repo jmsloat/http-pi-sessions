@@ -46,6 +46,20 @@ defmodule SessionDesk.PiIntegrationTest do
       )
 
     wait_until(fn -> Session.snapshot(id).status == :idle end)
+    assert Enum.any?(Session.snapshot(id).models, &(&1["id"] == "deterministic-reasoning"))
+    assert :ok = Session.command({:set_model, "desk-test", "deterministic-reasoning"}, id)
+
+    wait_until(fn ->
+      Session.snapshot(id).status == :idle and
+        Session.snapshot(id).model == "deterministic-reasoning"
+    end)
+
+    assert :ok = Session.command({:set_thinking, "high"}, id)
+
+    wait_until(fn ->
+      Session.snapshot(id).status == :idle and Session.snapshot(id).thinking == "high"
+    end)
+
     assert :ok = Session.command({:prompt, "Run the deterministic integration check"}, id)
     wait_until(fn -> Session.snapshot(id).status == :waiting end)
     view = Session.snapshot(id)
@@ -66,6 +80,80 @@ defmodule SessionDesk.PiIntegrationTest do
     assert List.last(view.messages).text =~ "real Pi runtime"
     assert view.tasks == []
     assert view.questions == []
+  end
+
+  @tag skip: is_nil(@runtime)
+  test "managed live sessions retain model and thinking choices across process and catalog restarts" do
+    runtime = Path.expand(@runtime)
+    root = Path.join(System.tmp_dir!(), "desk-managed-pi-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(root)
+    provider = Path.join(runtime, "desk-managed-test-provider.ts")
+    File.cp!("test/support/deterministic-provider.ts", provider)
+
+    old =
+      for key <- [:pi_executable, :pi_args, :pi_home],
+          into: %{},
+          do: {key, Application.get_env(:session_desk, key)}
+
+    on_exit(fn ->
+      Enum.each(old, fn {key, value} ->
+        if value,
+          do: Application.put_env(:session_desk, key, value),
+          else: Application.delete_env(:session_desk, key)
+      end)
+
+      File.rm_rf!(root)
+    end)
+
+    Application.put_env(:session_desk, :pi_executable, Path.join(runtime, "node_modules/.bin/pi"))
+    Application.put_env(:session_desk, :pi_home, Path.join(root, "home"))
+
+    Application.put_env(:session_desk, :pi_args, [
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "-e",
+      provider,
+      "--provider",
+      "desk-test",
+      "--model",
+      "deterministic"
+    ])
+
+    alias SessionDesk.Catalog
+    start_supervised!({Catalog, root: root, workspace: root, mode: "live"})
+    {:ok, pid} = Catalog.activate("live-main")
+    wait_until(fn -> Session.snapshot("live-main").status == :idle end)
+
+    assert :ok =
+             Session.command({:set_model, "desk-test", "deterministic-reasoning"}, "live-main")
+
+    wait_until(fn ->
+      Session.snapshot("live-main").status == :idle and
+        Session.snapshot("live-main").model == "deterministic-reasoning"
+    end)
+
+    assert :ok = Session.command({:set_thinking, "high"}, "live-main")
+
+    wait_until(fn ->
+      Session.snapshot("live-main").status == :idle and
+        Catalog.get("live-main").thinking == "high"
+    end)
+
+    assert :ok = :exec.kill(:sys.get_state(pid).os_pid, 9)
+    wait_until(fn -> Session.snapshot("live-main").status == :interrupted end)
+    assert :ok = Session.command(:restart, "live-main")
+    wait_until(fn -> Session.snapshot("live-main").status == :idle end)
+    assert Session.snapshot("live-main").model == "deterministic-reasoning"
+    assert Session.snapshot("live-main").thinking == "high"
+    stop_supervised!(Catalog)
+    start_supervised!({Catalog, root: root, workspace: root, mode: "live"})
+    assert Registry.lookup(SessionDesk.Registry, "live-main") == []
+    {:ok, _} = Catalog.activate("live-main")
+    wait_until(fn -> Session.snapshot("live-main").status == :idle end)
+    assert Session.snapshot("live-main").model == "deterministic-reasoning"
+    assert Session.snapshot("live-main").thinking == "high"
+    assert Session.snapshot("live-main").messages == []
   end
 
   defp wait_until(fun, tries \\ 400)
